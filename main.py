@@ -1,47 +1,56 @@
 from flask import Flask, jsonify, request
 from flask_jwt_simple import (
-    JWTManager, jwt_required, create_jwt, get_jwt_identity
+    JWTManager, jwt_required, create_jwt, get_jwt_identity, get_jwt
 )
 import json
 import requests
-from flask_cors import CORS
+from flask_cors import CORS 
+from flask_restful import Resource, Api
 
 app = Flask(__name__)
+
 CORS(app)
-
-
-# Setup the Flask-JWT-Simple extension
+api = Api(app)
 app.config['JWT_SECRET_KEY'] = 'super-secret'  # Change this!
 jwt = JWTManager(app)
 
 
-# Provide a method to create access tokens. The create_jwt()
-# function is used to actually generate the token
-@app.route('/login', methods=['GET'])
-def login():
-    token = request.args.get('token')
+def has_role(role):
+    def decorator(f):
+        @jwt_required
+        def helper(self):          
+            roles = get_jwt_identity().get('roles', [])
+            if role not in roles:
+                return 'Not role ' + role, 400
+            return f(self)
+        return helper
+    return decorator
 
-    if token:
-        url = "https://www.googleapis.com/oauth2/v1/userinfo?access_token=" + token
-        response = requests.get(url)
-        if response.status_code == 200:
-            data = json.loads(response.text)
-            username = data['email']
-            ret = {'jwt': create_jwt(identity=username)}
-            print('*'*30, username, jsonify(ret))
-            return jsonify(ret), 200    
+
+class User(Resource):
+    def get(self):
+        token = request.args.get('token')
+        print(token)
+        if(token):
+            url = "https://www.googleapis.com/oauth2/v1/userinfo?access_token=" + token
+            response = requests.get(url)
+            if response.status_code == 200:
+                data = json.loads(response.text)
+                email = data['email']    
+                return {'jwt': create_jwt(identity={'email': email, 'roles': ['admin']})}, 200
+            else:
+                return 'Not valid token', 400
         else:
-            return jsonify({"msg": "Not valid token"}), 400
-    else:
-        return jsonify({"msg": "Missing token"}), 400
+            return 'Missing token', 400
 
-# Protect a view with jwt_required, which requires a valid jwt
-# to be present in the headers.
-@app.route('/protected', methods=['GET'])
-@jwt_required
-def protected():
-    # Access the identity of the current user with get_jwt_identity
-    return jsonify({'hello_from': get_jwt_identity()}), 200
+class Protected(Resource):
+    @has_role('admin')    
+    def get(self):
+        return {'hello_from': get_jwt_identity()}, 200
+
+api.add_resource(User, '/login')
+api.add_resource(Protected, '/protected')
+
 
 if __name__ == '__main__':
-    app.run(debug = True, port = 8889)
+    app.run(debug=True, port=8889)
